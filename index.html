@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cinematic Christmas Tree - MediaPipe & Three.js</title>
+    <!-- Add Google Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Carattere&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #020202;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 2;
+            color: #FFD700;
+            pointer-events: none;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+        }
+        #controls {
+            position: absolute;
+            top: 100px;
+            left: 20px;
+            z-index: 2;
+            pointer-events: auto;
+        }
+        /* Add style for Christmas Text */
+        #christmas-text {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Carattere', cursive;
+            font-size: 4rem;
+            color: #FFD700;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.8), 0 0 20px rgba(255, 0, 0, 0.5);
+            z-index: 2;
+            pointer-events: none;
+            opacity: 0;
+            animation: fadeIn 3s ease-in forwards 1s;
+        }
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+
+        select {
+            background: rgba(0, 0, 0, 0.7);
+            color: #FFD700;
+            border: 1px solid #FFD700;
+            padding: 5px 10px;
+            font-family: inherit;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        h1 {
+            margin: 0;
+            font-weight: 300;
+            letter-spacing: 2px;
+            font-size: 1.5rem;
+            text-transform: uppercase;
+        }
+        p {
+            font-size: 0.8rem;
+            color: #aaa;
+            margin-top: 5px;
+        }
+        #video-input {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 160px;
+            height: 120px;
+            transform: scaleX(-1);
+            border-radius: 8px;
+            opacity: 0.3;
+            z-index: 2;
+            border: 1px solid #333;
+            transition: opacity 0.3s;
+        }
+        #video-input:hover {
+            opacity: 1;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #FFD700;
+            font-size: 1.2rem;
+            z-index: 10;
+            transition: opacity 0.5s;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #333;
+            margin-right: 8px;
+            box-shadow: 0 0 5px currentColor;
+        }
+        .status-active { background-color: #00ff00; color: #00ff00; }
+        .status-inactive { background-color: #ff0000; color: #ff0000; }
+    </style>
+    
+    <!-- Import Maps for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loading">Initializing Magic...</div>
+
+    <div id="ui-layer">
+        <h1><span id="cam-status" class="status-indicator status-inactive"></span>Christmas Magic</h1>
+        <p>Show your hand to control the tree.<br>Open Hand: Scatter | Fist: Gather</p>
+    </div>
+
+    <div id="controls">
+        <select id="theme-selector">
+            <option value="green">Classic Christmas</option>
+            <option value="blue">Winter Wonderland</option>
+            <option value="red">Festive Berry</option>
+        </select>
+    </div>
+
+    <div id="christmas-text">Merry Christmas</div>
+
+    <div id="canvas-container"></div>
+    <video id="video-input" playsinline></video>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- Configuration ---
+        const CONFIG = {
+            particleCount: 8000, // Reduced from 20000
+                colors: {
+                    // Green & Gold Theme Colors
+                    emerald: new THREE.Color(0x014421),      // Forest Green - primary
+                    oldGold: new THREE.Color(0xD4AF37),      // Gold - main accent
+                    ivory: new THREE.Color(0xFDFBF7),        // Cream/Ivory - soft neutral
+                    deepEmerald: new THREE.Color(0x046307),  // Brighter green for depth
+                    
+                    // Blue Ice Theme Colors
+                    deepBlue: new THREE.Color(0x2A3F5F),     // Darker blue base
+                    silver: new THREE.Color(0x808080),       // Darker Silver (DimGray)
+                    frostWhite: new THREE.Color(0x8A9BA8),   // Darker Frosted white (SlateGray)
+                    glacialBlue: new THREE.Color(0xA1C6DB),  // Darker Glacial Blue
+                    iceBlue: new THREE.Color(0xE0FFFF),      // Bright Ice Blue
+                    
+                    // Red Theme Colors
+                    darkRed: new THREE.Color(0x4a0404),      // Deep Oxblood
+                    crimson: new THREE.Color(0xD42426),      // Bright Red
+                    wine: new THREE.Color(0x722F37),         // Deep berry/plum
+                    gold: new THREE.Color(0xFFD700),         // Pure Gold
+                    
+                    // Universal
+                    star: new THREE.Color(0xFFF8E7)          // Warm star white
+                },
+                themes: {
+                    // Emerald & Gold: Classic Christmas
+                    green: { 
+                        primary: 'emerald', 
+                        secondary: ['oldGold', 'ivory', 'deepEmerald'], 
+                        ribbon: 'oldGold',
+                        treeBase: 'emerald',
+                        accent: 'ivory'
+                    },
+                    
+                    // Blue Ice: Frosty Winter Wonderland
+                    blue: { 
+                        primary: 'deepBlue', 
+                        secondary: ['silver', 'frostWhite', 'glacialBlue'], 
+                        ribbon: 'iceBlue',
+                        treeBase: 'deepBlue',
+                        accent: 'silver'
+                    },
+                    
+                    // Red: Bold & Berry Festive
+                    red: { 
+                        primary: 'crimson', 
+                        secondary: ['gold', 'wine', 'darkRed'], 
+                        ribbon: 'gold',
+                        treeBase: 'darkRed', 
+                        accent: 'gold'
+                    }
+                },
+                currentTheme: 'green',
+                treeHeight: 15,
+                treeRadius: 7,
+                bloomStrength: 0.7, // Increased slightly for halo effect
+                bloomRadius: 0.5,   // Increased radius for softer halo
+                bloomThreshold: 0.2 // Lower threshold to catch the dimmer star
+            };
+
+        // --- Global Variables ---
+        let scene, camera, renderer, composer, controls;
+        let treeGroup; // Group to hold all tree elements for unified movement
+        let leafMesh, ornamentMesh, ribbonGroup, starMesh; // Changed particleMesh to leafMesh, ornamentMesh
+        let time = 0;
+        let targetExpansion = 0;
+        let currentExpansion = 0;
+        
+        // Hand Control Variables
+        let targetRotationX = 0;
+        let targetRotationY = 0;
+        let targetPositionX = 0;
+        let targetPositionY = 0;
+        
+        // --- Shaders ---
+        const vertexShader = `
+            uniform float uTime;
+            uniform float uExpansion;
+            
+            attribute vec3 aPositionStart;
+            attribute vec3 aPositionEnd;
+            attribute vec3 aColor;
+            attribute float aSize;
+            attribute float aType; // 0: Leaf, 1: Gold, 2: Red, 3: Silver, 4: Blue, 5: Star
+            
+            varying vec3 vColor;
+            varying float vType;
+            
+            // Simplex noise function
+            vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+            vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+            vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+            float snoise(vec3 v) {
+                const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+                const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+                vec3 i  = floor(v + dot(v, C.yyy) );
+                vec3 x0 = v - i + dot(i, C.xxx) ;
+                vec3 g = step(x0.yzx, x0.xyz);
+                vec3 l = 1.0 - g;
+                vec3 i1 = min( g.xyz, l.zxy );
+                vec3 i2 = max( g.xyz, l.zxy );
+                vec3 x1 = x0 - i1 + C.xxx;
+                vec3 x2 = x0 - i2 + C.yyy;
+                vec3 x3 = x0 - D.yyy;
+                i = mod289(i);
+                vec4 p = permute( permute( permute(
+                        i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
+                        + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
+                        + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+                float n_ = 0.142857142857;
+                vec3  ns = n_ * D.wyz - D.xzx;
+                vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+                vec4 x_ = floor(j * ns.z);
+                vec4 y_ = floor(j - 7.0 * x_ );
+                vec4 x = x_ *ns.x + ns.yyyy;
+                vec4 y = y_ *ns.x + ns.yyyy;
+                vec4 h = 1.0 - abs(x) - abs(y);
+                vec4 b0 = vec4( x.xy, y.xy );
+                vec4 b1 = vec4( x.zw, y.zw );
+                vec4 s0 = floor(b0)*2.0 + 1.0;
+                vec4 s1 = floor(b1)*2.0 + 1.0;
+                vec4 sh = -step(h, vec4(0.0));
+                vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
+                vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
+                vec3 p0 = vec3(a0.xy,h.x);
+                vec3 p1 = vec3(a0.zw,h.y);
+                vec3 p2 = vec3(a1.xy,h.z);
+                vec3 p3 = vec3(a1.zw,h.w);
+                vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+                p0 *= norm.x;
+                p1 *= norm.y;
+                p2 *= norm.z;
+                p3 *= norm.w;
+                vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+                m = m * m;
+                return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3) ) );
+            }
+
+            void main() {
+                vColor = aColor;
+                vType = aType;
+                
+                // Interpolate between Start (Tree) and End (Scattered)
+                vec3 pos = mix(aPositionStart, aPositionEnd, uExpansion);
+                
+                // Add some floating noise
+                float noiseFreq = 0.5;
+                float noiseAmp = 0.5 * uExpansion; // More noise when expanded
+                
+                float n = snoise(vec3(pos.x * noiseFreq + uTime * 0.2, pos.y * noiseFreq, pos.z * noiseFreq));
+                pos += vec3(n) * noiseAmp;
+                
+                // Rotate the whole tree slowly
+                float angle = uTime * 0.1;
+                mat3 rotY = mat3(
+                    cos(angle), 0.0, sin(angle),
+                    0.0, 1.0, 0.0,
+                    -sin(angle), 0.0, cos(angle)
+                );
+                pos = rotY * pos;
+
+                // Instance Matrix handling
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                
+                // Scale particles
+                float scale = aSize;
+                // Make ornaments slightly larger and pulse
+                if (aType > 0.5 && aType < 4.5) {
+                    scale *= 1.5 + 0.5 * sin(uTime * 3.0 + aPositionStart.y);
+                }
+                // Star specific
+                if (aType > 4.5) {
+                    scale *= 3.0 + 1.0 * sin(uTime * 2.0);
+                }
+                
+                mvPosition.xyz += position * scale;
+                
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `;
+
+        const fragmentShader = `
+            varying vec3 vColor;
+            varying float vType;
+            
+            void main() {
+                // Simple circular particle
+                // vec2 uv = gl_PointCoord.xy - 0.5; // Not using PointCoord for Mesh
+                
+                // Since we are using InstancedMesh with a geometry, we don't need circle discard logic 
+                // unless we want soft edges. Let's just output color.
+                
+                vec3 finalColor = vColor;
+                
+                // Add extra brightness for bloom
+                if (vType > 0.5) {
+                    finalColor *= 1.2; // Ornaments slightly brighter
+                } else {
+                    finalColor *= 0.6; // Leaves lighter
+                }
+                
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        `;
+
+        const ribbonVertexShader = `
+            uniform float uTime;
+            uniform float uExpansion;
+            varying vec2 vUv;
+            
+            void main() {
+                vUv = uv;
+                vec3 pos = position;
+                
+                // Scatter logic: Explode from center Y axis
+                vec3 center = vec3(0.0, pos.y, 0.0);
+                vec3 dir = pos - center;
+                float l = length(dir);
+                if (l > 0.001) dir = normalize(dir);
+                else dir = vec3(1.0, 0.0, 0.0);
+                
+                // Scatter outwards
+                vec3 targetPos = pos + dir * (10.0 + l * 2.0); 
+                pos = mix(pos, targetPos, uExpansion);
+                
+                // Twist effect
+                float angle = uTime * 0.1;
+                float c = cos(angle);
+                float s = sin(angle);
+                // Simple Y rotation
+                float x = pos.x * c + pos.z * s;
+                float z = -pos.x * s + pos.z * c;
+                pos.x = x;
+                pos.z = z;
+
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+            }
+        `;
+
+        const ribbonFragmentShader = `
+            uniform vec3 uColor;
+            uniform float uTime;
+            varying vec2 vUv;
+            
+            void main() {
+                // Chopped effect: Use Sine wave on UV.x (length of tube)
+                // Animate offset with uTime to make it "spin up"
+                float dash = sin(vUv.x * 80.0 + uTime * 5.0);
+                
+                if (dash < 0.0) discard; // Create gaps
+                
+                // Basic metallic shine
+                gl_FragColor = vec4(uColor * 2.0, 1.0);
+            }
+        `;
+
+        // --- Initialization ---
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            // Theme Selector
+            document.getElementById('theme-selector').addEventListener('change', (e) => {
+                CONFIG.currentTheme = e.target.value;
+                rebuildScene();
+            });
+
+            // Scene
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x020202, 0.02);
+            
+            // Create Tree Group
+            treeGroup = new THREE.Group();
+            scene.add(treeGroup);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 30);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.toneMapping = THREE.ReinhardToneMapping;
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+
+            // Post Processing (Bloom)
+            const renderScene = new RenderPass(scene, camera);
+            const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+            bloomPass.threshold = CONFIG.bloomThreshold;
+            bloomPass.strength = CONFIG.bloomStrength;
+            bloomPass.radius = CONFIG.bloomRadius;
+
+            composer = new EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            // Create Objects
+            rebuildScene();
+
+            // Resize Handler
+            window.addEventListener('resize', onWindowResize);
+
+            // Start Animation
+            animate();
+            
+            // Init MediaPipe
+            initMediaPipe();
+        }
+
+        function rebuildScene() {
+            // Clear tree group
+            while(treeGroup.children.length > 0){ 
+                treeGroup.remove(treeGroup.children[0]); 
+            }
+            
+            // Reset references
+            leafMesh = null;
+            ornamentMesh = null;
+            ribbonGroup = null;
+            starMesh = null;
+            
+            createParticles();
+            createRibbon();
+            createStar();
+            updateTextColor();
+            
+            // Add floor if not exists (check logic if needed, but simple add is fine as it's static)
+            // Actually floor is added in createParticles in previous code, let's move it out or keep it.
+            // To avoid duplicates, let's just ensure we don't add multiple floors.
+            // For simplicity, we'll assume floor is managed or just add it once in init if we wanted.
+            // But since createParticles adds it, we should probably clean it up too.
+            // Let's find the floor and remove it.
+            const floor = scene.children.find(c => c.geometry && c.geometry.type === 'PlaneGeometry');
+            if (floor) scene.remove(floor);
+            
+            // Re-add floor inside createParticles or here.
+            const planeGeo = new THREE.PlaneGeometry(100, 100);
+            const planeMat = new THREE.MeshBasicMaterial({ color: 0x020502, side: THREE.FrontSide });
+            const plane = new THREE.Mesh(planeGeo, planeMat);
+            plane.rotation.x = -Math.PI / 2;
+            plane.position.y = -CONFIG.treeHeight/2 - 2;
+            scene.add(plane);
+        }
+
+        function updateTextColor() {
+            const textElement = document.getElementById('christmas-text');
+            const theme = CONFIG.themes[CONFIG.currentTheme];
+            const color = CONFIG.colors[theme.ribbon]; // Use ribbon color for text
+            
+            const r = Math.floor(color.r * 255);
+            const g = Math.floor(color.g * 255);
+            const b = Math.floor(color.b * 255);
+            
+            textElement.style.color = `rgb(${r},${g},${b})`;
+            textElement.style.textShadow = `0 0 10px rgba(${r}, ${g}, ${b}, 0.8), 0 0 20px rgba(${r}, ${g}, ${b}, 0.5)`;
+        }
+
+        function createParticles() {
+            // Separate arrays for leaves and ornaments
+            const leaves = { posStart: [], posEnd: [], colors: [], sizes: [], types: [] };
+            const ornaments = { posStart: [], posEnd: [], colors: [], sizes: [], types: [] };
+
+            const theme = CONFIG.themes[CONFIG.currentTheme];
+            const primaryColor = CONFIG.colors[theme.primary];
+
+            for (let i = 0; i < CONFIG.particleCount; i++) {
+                // Determine type
+                let type = 0; // Leaf (Primary Color)
+                let color = primaryColor;
+                let size = Math.random() * 0.8 + 0.2; 
+                let isOrnament = false;
+                
+                const rand = Math.random();
+                if (rand > 0.97) {
+                    type = 2; // Ornament 1
+                    color = CONFIG.colors[theme.secondary[0]];
+                    size = 1.5 + Math.random() * 0.5;
+                    isOrnament = true;
+                } else if (rand > 0.94) {
+                    type = 4; // Ornament 2
+                    color = CONFIG.colors[theme.secondary[1]];
+                    size = 1.4 + Math.random() * 0.5;
+                    isOrnament = true;
+                } else if (rand > 0.91) {
+                    type = 3; // Ornament 3
+                    color = CONFIG.colors[theme.secondary[2]];
+                    size = 1.4 + Math.random() * 0.5;
+                    isOrnament = true;
+                } 
+
+                // --- Start Position (Tree Shape) ---
+                let x, y, z;
+                
+                // Cone Volume
+                y = (Math.random() - 0.5) * CONFIG.treeHeight;
+                const heightFactor = 1.0 - (y + CONFIG.treeHeight/2) / CONFIG.treeHeight;
+                const radiusAtY = heightFactor * CONFIG.treeRadius;
+                
+                // Random point in circle at height y
+                const r = Math.sqrt(Math.random()) * radiusAtY; 
+                const theta = Math.random() * Math.PI * 2;
+                
+                x = r * Math.cos(theta);
+                z = r * Math.sin(theta);
+
+                // --- End Position (Scattered) ---
+                const scatterFactor = 2.5 + Math.random() * 2.0;
+                const ex = x * scatterFactor;
+                const ey = y * scatterFactor * 0.5;
+                const ez = z * scatterFactor;
+
+                // Push to appropriate arrays
+                const target = isOrnament ? ornaments : leaves;
+                target.posStart.push(x, y, z);
+                target.posEnd.push(ex, ey, ez);
+                target.colors.push(color.r, color.g, color.b);
+                target.sizes.push(size);
+                target.types.push(type);
+            }
+
+            // Shared Material
+            const material = new THREE.ShaderMaterial({
+                uniforms: {
+                    uTime: { value: 0 },
+                    uExpansion: { value: 0 }
+                },
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader,
+                transparent: false,
+                side: THREE.DoubleSide
+            });
+
+            const dummy = new THREE.Object3D();
+
+            // Create Leaf Mesh (Icosahedron)
+            if (leaves.posStart.length > 0) {
+                const leafGeo = new THREE.IcosahedronGeometry(0.1, 0);
+                leafMesh = new THREE.InstancedMesh(leafGeo, material, leaves.posStart.length / 3);
+                leafMesh.frustumCulled = false; // Disable culling to prevent disappearing at angles
+                
+                leafMesh.geometry.setAttribute('aPositionStart', new THREE.InstancedBufferAttribute(new Float32Array(leaves.posStart), 3));
+                leafMesh.geometry.setAttribute('aPositionEnd', new THREE.InstancedBufferAttribute(new Float32Array(leaves.posEnd), 3));
+                leafMesh.geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(new Float32Array(leaves.colors), 3));
+                leafMesh.geometry.setAttribute('aSize', new THREE.InstancedBufferAttribute(new Float32Array(leaves.sizes), 1));
+                leafMesh.geometry.setAttribute('aType', new THREE.InstancedBufferAttribute(new Float32Array(leaves.types), 1));
+
+                for (let i = 0; i < leaves.posStart.length / 3; i++) {
+                    dummy.position.set(0,0,0);
+                    dummy.updateMatrix();
+                    leafMesh.setMatrixAt(i, dummy.matrix);
+                }
+                leafMesh.instanceMatrix.needsUpdate = true;
+                treeGroup.add(leafMesh);
+            }
+
+            // Create Ornament Mesh (Sphere)
+            if (ornaments.posStart.length > 0) {
+                const ornamentGeo = new THREE.SphereGeometry(0.1, 16, 16);
+                ornamentMesh = new THREE.InstancedMesh(ornamentGeo, material, ornaments.posStart.length / 3);
+                ornamentMesh.frustumCulled = false; // Disable culling to prevent disappearing at angles
+                
+                ornamentMesh.geometry.setAttribute('aPositionStart', new THREE.InstancedBufferAttribute(new Float32Array(ornaments.posStart), 3));
+                ornamentMesh.geometry.setAttribute('aPositionEnd', new THREE.InstancedBufferAttribute(new Float32Array(ornaments.posEnd), 3));
+                ornamentMesh.geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(new Float32Array(ornaments.colors), 3));
+                ornamentMesh.geometry.setAttribute('aSize', new THREE.InstancedBufferAttribute(new Float32Array(ornaments.sizes), 1));
+                ornamentMesh.geometry.setAttribute('aType', new THREE.InstancedBufferAttribute(new Float32Array(ornaments.types), 1));
+
+                for (let i = 0; i < ornaments.posStart.length / 3; i++) {
+                    dummy.position.set(0,0,0);
+                    dummy.updateMatrix();
+                    ornamentMesh.setMatrixAt(i, dummy.matrix);
+                }
+                ornamentMesh.instanceMatrix.needsUpdate = true;
+                treeGroup.add(ornamentMesh);
+            }
+        }
+
+        function createRibbon() {
+            ribbonGroup = new THREE.Group();
+            treeGroup.add(ribbonGroup);
+
+            // Single Spiral Configuration
+            const height = CONFIG.treeHeight;
+            const theme = CONFIG.themes[CONFIG.currentTheme];
+            const color = CONFIG.colors[theme.ribbon];
+            
+            const material = new THREE.ShaderMaterial({
+                uniforms: {
+                    uTime: { value: 0 },
+                    uExpansion: { value: 0 },
+                    uColor: { value: color }
+                },
+                vertexShader: ribbonVertexShader,
+                fragmentShader: ribbonFragmentShader,
+                side: THREE.DoubleSide,
+                transparent: true
+            });
+
+            const points = [];
+            const turns = 4.5; // Number of times it wraps around
+            const segments = 200; // Smoothness
+            
+            for (let i = 0; i <= segments; i++) {
+                const t = i / segments;
+                
+                // Height goes from bottom to top
+                const y = -height/2 + t * height * 0.95; // Stop just before the star
+                
+                // Radius tapers as we go up
+                const coneRadius = (1 - (y + height/2)/height) * CONFIG.treeRadius;
+                const radius = coneRadius + 1.2; // Offset from tree surface
+                
+                const angle = t * turns * Math.PI * 2;
+                
+                const px = Math.cos(angle) * radius;
+                const pz = Math.sin(angle) * radius;
+                
+                points.push(new THREE.Vector3(px, y, pz));
+            }
+            
+            const curve = new THREE.CatmullRomCurve3(points);
+            const geometry = new THREE.TubeGeometry(curve, 256, 0.06, 8, false); // Thinner ribbon (was 0.15)
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.frustumCulled = false; // Disable culling to prevent disappearing at angles
+            
+            ribbonGroup.add(mesh);
+        }
+
+        function createStar() {
+            // Rounded 5-pointed star shape
+            const shape = new THREE.Shape();
+            const points = 5;
+            const outerRadius = 0.6; 
+            const innerRadius = 0.3; // Fatter for rounder look
+            
+            for (let i = 0; i < points * 2; i++) {
+                const angle = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+                const r = (i % 2 === 0) ? outerRadius : innerRadius;
+                const x = Math.cos(angle) * r;
+                const y = Math.sin(angle) * r;
+                
+                if (i === 0) shape.moveTo(x, y);
+                else shape.lineTo(x, y);
+            }
+            shape.closePath();
+            
+            const geometry = new THREE.ExtrudeGeometry(shape, {
+                depth: 0.2, 
+                bevelEnabled: true,
+                bevelThickness: 0.1, // Increased for roundness
+                bevelSize: 0.1,      // Increased for roundness
+                bevelSegments: 5     // Smoother bevel
+            });
+            
+            // Use theme colors for the star to harmonize
+            const theme = CONFIG.themes[CONFIG.currentTheme];
+            
+            let starColor = CONFIG.colors.star; // Default
+            
+            // Logic to pick star color based on theme
+            if (CONFIG.currentTheme === 'green') starColor = CONFIG.colors.oldGold;
+            else if (CONFIG.currentTheme === 'blue') starColor = CONFIG.colors.silver;
+            else if (CONFIG.currentTheme === 'red') starColor = CONFIG.colors.gold;
+
+            const material = new THREE.MeshStandardMaterial({
+                color: starColor,
+                emissive: starColor,
+                emissiveIntensity: 2.0, // Brighter star (was 0.4)
+                roughness: 0.3,
+                metalness: 0.9
+            });
+            
+            starMesh = new THREE.Mesh(geometry, material);
+            starMesh.frustumCulled = false; // Disable culling to prevent disappearing at angles
+            starMesh.position.y = CONFIG.treeHeight / 2 + 0.5; 
+            treeGroup.add(starMesh);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            time += 0.01;
+            
+            // Smoothly interpolate expansion
+            currentExpansion += (targetExpansion - currentExpansion) * 0.05;
+
+            // Smoothly interpolate tree group position and rotation
+            if (treeGroup) {
+                treeGroup.position.x += (targetPositionX - treeGroup.position.x) * 0.1;
+                treeGroup.position.y += (targetPositionY - treeGroup.position.y) * 0.1;
+                treeGroup.rotation.x += (targetRotationX - treeGroup.rotation.x) * 0.1;
+                treeGroup.rotation.y += (targetRotationY - treeGroup.rotation.y) * 0.1;
+            }
+
+            // Update uniforms for both meshes
+            if (leafMesh) {
+                leafMesh.material.uniforms.uTime.value = time;
+                leafMesh.material.uniforms.uExpansion.value = currentExpansion;
+            }
+            if (ornamentMesh) {
+                ornamentMesh.material.uniforms.uTime.value = time;
+                ornamentMesh.material.uniforms.uExpansion.value = currentExpansion;
+            }
+            
+            if (ribbonGroup) {
+                ribbonGroup.children.forEach((mesh, index) => {
+                    mesh.material.uniforms.uTime.value = time;
+                    mesh.material.uniforms.uExpansion.value = currentExpansion;
+                    
+                    // Add individual rotation for dynamic effect
+                    // Rotate alternating layers in different directions
+                    const dir = index % 2 === 0 ? 1 : -1;
+                    mesh.rotation.y += 0.005 * dir;
+                });
+            }
+            
+            if (starMesh) {
+                starMesh.rotation.y = time * 0.5;
+                // Scatter star upwards
+                const starBaseY = CONFIG.treeHeight / 2 + 0.5;
+                starMesh.position.y = starBaseY + currentExpansion * 10.0;
+                // Removed haloSprite update
+            }
+
+            controls.update();
+            composer.render();
+        }
+
+        // --- MediaPipe Integration ---
+        function initMediaPipe() {
+            const videoElement = document.getElementById('video-input');
+            const statusElement = document.getElementById('cam-status');
+            const loadingElement = document.getElementById('loading');
+
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onResults);
+
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 320,
+                height: 240
+            });
+
+            cameraUtils.start()
+                .then(() => {
+                    loadingElement.style.opacity = 0;
+                    statusElement.classList.remove('status-inactive');
+                    statusElement.classList.add('status-active');
+                    console.log("Camera started");
+                })
+                .catch(err => {
+                    console.error("Error starting camera:", err);
+                    loadingElement.innerText = "Camera Error. Check permissions.";
+                });
+        }
+
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Calculate "Openness" of hand
+                // Simple heuristic: Average distance of finger tips from wrist (landmark 0)
+                
+                const wrist = landmarks[0];
+                const tips = [4, 8, 12, 16, 20]; // Thumb, Index, Middle, Ring, Pinky tips
+                
+                let avgDist = 0;
+                tips.forEach(idx => {
+                    const tip = landmarks[idx];
+                    const d = Math.sqrt(
+                        Math.pow(tip.x - wrist.x, 2) + 
+                        Math.pow(tip.y - wrist.y, 2) + 
+                        Math.pow(tip.z - wrist.z, 2)
+                    );
+                    avgDist += d;
+                });
+                avgDist /= tips.length;
+
+                // Thresholds need tuning based on camera distance, but roughly:
+                // Closed fist ~ 0.1 - 0.2
+                // Open palm ~ 0.3 - 0.5
+                
+                // Normalize roughly between 0.15 and 0.35
+                const minD = 0.15;
+                const maxD = 0.35;
+                
+                let openness = (avgDist - minD) / (maxD - minD);
+                openness = Math.max(0, Math.min(1, openness));
+                
+                // Set target expansion
+                targetExpansion = openness;
+
+                // --- Hand Position Control ---
+                // Use Middle Finger MCP (9) as center
+                const handCenter = landmarks[9];
+                
+                // Map coordinates (0..1) to scene space
+                // X: 0 (left) -> 1 (right)
+                // Y: 0 (top) -> 1 (bottom)
+                
+                const x = (handCenter.x - 0.5) * 2; // -1 to 1
+                const y = (handCenter.y - 0.5) * 2; // -1 to 1
+                
+                // Position: Move tree
+                targetPositionX = x * 10;
+                targetPositionY = -y * 5; // Invert Y
+                
+                // Rotation: Tilt tree
+                targetRotationY = x * 0.5;
+                targetRotationX = y * 0.5;
+                
+            } else {
+                // No hand detected, default to closed tree or maintain last state?
+                // Let's default to closed for the "surprise" effect when hand enters
+                targetExpansion = 0;
+                
+                // Reset position
+                targetPositionX = 0;
+                targetPositionY = 0;
+                targetRotationX = 0;
+                targetRotationY = 0;
+            }
+        }
+
+        // Start the app
+        init();
+
+    </script>
+</body>
+</html>
